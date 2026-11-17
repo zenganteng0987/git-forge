@@ -65,6 +65,49 @@ export function headOid(repo: RepoRec): string | null {
   return repo.refs.get(`refs/heads/${repo.defaultBranch}`) ?? null;
 }
 
+// ---------------------------------------------------------------- response cache
+
+const CACHE_MAX_ENTRIES = 128;
+const CACHE_MAX_BYTES = 16 * 1024 * 1024;
+const CACHE_MAX_RESPONSE = 2 * 1024 * 1024;
+
+/**
+ * A fingerprint of everything a git-protocol response may depend on: the object count, the
+ * default branch and every ref. The object map is append-only and content-addressed — an oid
+ * always names the same bytes and entries are never removed — so two moments with the same
+ * count hold the same object set, and the reachable closure behind any request is identical.
+ * Any push, ref update or object-creating write therefore moves the fingerprint, and a cached
+ * response can never be served for a state it was not computed in.
+ */
+export function repoFingerprint(repo: RepoRec): string {
+  const refs = [...repo.refs.entries()].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+  let out = `${repo.objects.size}|${repo.defaultBranch}`;
+  for (const [name, oid] of refs) out += `|${name}=${oid}`;
+  return out;
+}
+
+/**
+ * Answer from the repo's response cache when this exact key was computed before, else compute,
+ * remember (within the size bounds) and answer. Only pure request handlers belong behind this:
+ * advertisements, ls-refs and fetches, whose bytes are a function of repo state + request.
+ */
+export function cachedResponse(repo: RepoRec, key: string, make: () => Buffer): Buffer {
+  const hit = repo.httpCache.get(key);
+  if (hit !== undefined) return hit;
+  const body = make();
+  if (body.length <= CACHE_MAX_RESPONSE) {
+    repo.httpCache.set(key, body);
+    repo.httpCacheBytes += body.length;
+    while (repo.httpCache.size > CACHE_MAX_ENTRIES || repo.httpCacheBytes > CACHE_MAX_BYTES) {
+      const oldest = repo.httpCache.keys().next().value as string | undefined;
+      if (oldest === undefined) break;
+      repo.httpCacheBytes -= (repo.httpCache.get(oldest) as Buffer).length;
+      repo.httpCache.delete(oldest);
+    }
+  }
+  return body;
+}
+
 // ---------------------------------------------------------------- advertisement
 
 /** The info/refs body for one service. Protocol v2 is answered only for upload-pack. */

@@ -4,9 +4,10 @@
 // (MAKEFUN_SHOP_TOKEN); a missing or wrong token is a 401, and every API answer is JSON with a
 // request id, as GitHub's are.
 
+import { createHash } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { Store } from './store.ts';
-import { advertise, handleFetchV0, handleFetchV2, handleLsRefs, handleReceivePack } from './gitproto.ts';
+import { advertise, cachedResponse, handleFetchV0, handleFetchV2, handleLsRefs, handleReceivePack, repoFingerprint } from './gitproto.ts';
 import { handleRest, type RestResult } from './rest.ts';
 import { handleGraphQL } from './graphql.ts';
 import { handleMcp } from './mcp.ts';
@@ -203,19 +204,23 @@ function dispatch(
           return;
         }
         const version2 = (req.headers['git-protocol'] ?? '') === 'version=2';
-        const result = advertise(repo, service, version2);
-        sendBuffer(res, 200, result.body, result.contentType);
+        // Advertisements and upload-pack answers are pure functions of repo state + request;
+        // the fingerprint in the key moves on any mutation, so a cached body is always the
+        // body a fresh computation would produce for the state it is served in.
+        const fingerprint = repoFingerprint(repo);
+        const advertised = cachedResponse(repo, `${fingerprint}|refs|${service}|${version2 ? 2 : 0}`, () => advertise(repo, service, version2).body);
+        sendBuffer(res, 200, advertised, `application/x-${service}-advertisement`);
         return;
       }
       if (route === 'git-upload-pack' && method === 'POST') {
-        const firstLine = firstPktPayload(body);
-        if (firstLine.startsWith('command=ls-refs')) {
-          sendBuffer(res, 200, handleLsRefs(repo, body), 'application/x-git-upload-pack-result');
-        } else if (firstLine.startsWith('command=fetch')) {
-          sendBuffer(res, 200, handleFetchV2(repo, body), 'application/x-git-upload-pack-result');
-        } else {
-          sendBuffer(res, 200, handleFetchV0(repo, body), 'application/x-git-upload-pack-result');
-        }
+        const key = `${repoFingerprint(repo)}|up|${body.length}|${createHash('sha1').update(body).digest('hex')}`;
+        const answered = cachedResponse(repo, key, () => {
+          const firstLine = firstPktPayload(body);
+          if (firstLine.startsWith('command=ls-refs')) return handleLsRefs(repo, body);
+          if (firstLine.startsWith('command=fetch')) return handleFetchV2(repo, body);
+          return handleFetchV0(repo, body);
+        });
+        sendBuffer(res, 200, answered, 'application/x-git-upload-pack-result');
         return;
       }
       if (route === 'git-receive-pack' && method === 'POST') {

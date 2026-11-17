@@ -59,6 +59,9 @@ export interface RepoRec {
   nextNumber: number;
   clock: number;
   readonly createdAtSec: number;
+  /** Memoised git-protocol responses, keyed by state fingerprint + request (see gitproto.ts). */
+  readonly httpCache: Map<string, Buffer>;
+  httpCacheBytes: number;
 }
 
 export class Store {
@@ -110,6 +113,8 @@ export class Store {
       nextNumber: 1,
       clock: 0,
       createdAtSec: EPOCH_SEC + this.nextRepoId,
+      httpCache: new Map(),
+      httpCacheBytes: 0,
     };
     this.nextRepoId += 1;
     this.repos.set(name, repo);
@@ -262,9 +267,29 @@ export function mergeBase(repo: RepoRec, a: string, b: string): string | null {
   return null;
 }
 
-/** Is `ancestor` reachable from `descendant` (a fast-forward check)? */
+/**
+ * Is `ancestor` reachable from `descendant` (a fast-forward check)? Breadth-first from the
+ * descendant, stopping the moment the ancestor is visited: the usual case (the old tip is the
+ * new tip's parent, or a few generations back) costs a handful of commit parses instead of a
+ * walk over the whole history. The answer is unchanged — it is membership in the same closure
+ * `commitClosure` would build, tested as each commit is first reached.
+ */
 export function isAncestor(repo: RepoRec, ancestor: string, descendant: string): boolean {
-  return new Set(commitClosure(repo, [descendant])).has(ancestor);
+  const seen = new Set<string>();
+  let frontier = [descendant];
+  while (frontier.length > 0) {
+    const next: string[] = [];
+    for (const oid of frontier) {
+      if (seen.has(oid)) continue;
+      const commit = getCommit(repo, oid);
+      if (commit === null) continue;
+      seen.add(oid);
+      if (oid === ancestor) return true;
+      next.push(...commit.parents);
+    }
+    frontier = next;
+  }
+  return false;
 }
 
 // ---------------------------------------------------------------- trees and files
