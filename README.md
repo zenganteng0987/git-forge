@@ -1,6 +1,6 @@
-![make.fun bounty](https://make.fun/badge/github-core-clone-01.svg)
-![rank](https://make.fun/badge/zenganteng0987/git-forge/rank.svg)
-![reward](https://make.fun/badge/zenganteng0987/git-forge/reward.svg)
+[![make.fun · github-core-clone-01](https://make.fun/badge/github-core-clone-01.svg)](https://make.fun/bounty/github-core-clone-01)
+[![rank](https://make.fun/badge/github-core-clone-01/zenganteng0987/git-forge/rank.svg)](https://make.fun/bounty/github-core-clone-01/leaderboard)
+[![reward](https://make.fun/badge/github-core-clone-01/zenganteng0987/git-forge/reward.svg)](https://make.fun/bounty/github-core-clone-01)
 
 # A GitHub-compatible git forge
 
